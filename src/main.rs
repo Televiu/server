@@ -13,7 +13,7 @@ use axum::{
         Extension, Query,
         ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderName, StatusCode},
+    http::{self, HeaderName, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     serve,
@@ -471,15 +471,19 @@ async fn main() -> Result<(), Error> {
 
     let state = Arc::new(State::new());
 
-    //let origins = [ui_address.parse().unwrap()];
+    let origins = ["https://televiu.fly.dev".parse().unwrap()];
 
     let service = ServiceBuilder::new()
         .layer(TraceLayer::new_for_http())
         .layer(CompressionLayer::new())
         .layer(PropagateHeaderLayer::new(HeaderName::from_static(
             "x-request-id",
-        )));
-    // .layer(CorsLayer::new().allow_origin(origins));
+        )))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(origins)
+                .allow_methods([http::Method::GET, http::Method::POST]),
+        );
 
     let router = Router::new()
         .route("/api/register", post(register))
