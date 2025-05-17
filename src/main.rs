@@ -1,21 +1,22 @@
 use std::{collections::HashMap, env, io::Error, sync::Arc};
 use tokio::{
     net::TcpListener,
+    select, spawn,
     sync::{RwLock, mpsc},
 };
 
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{Level, debug, error, event, info, span, trace, warn};
 
 use axum::{
-    Json, Router,
+    Router,
     extract::{
         Extension, Query,
         ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
-    http::{self, HeaderName, StatusCode},
+    http::{self, HeaderName},
     response::IntoResponse,
-    routing::{get, post},
+    routing::get,
     serve,
 };
 
@@ -27,7 +28,6 @@ use tower_http::{
 
 pub struct Channel {
     pub sender: Option<mpsc::Sender<Utf8Bytes>>,
-    pub receiver: Option<mpsc::Receiver<Utf8Bytes>>,
 }
 
 type Device = String;
@@ -46,63 +46,11 @@ impl State {
 
 /// Payload for the register and unregister a new player.
 #[derive(Serialize, Deserialize)]
-struct PlayerPayload {
+struct Registration {
     /// Device name.
     device: String,
     /// Device secret.
     secret: String,
-}
-
-/// Register a new device with the server.
-///
-/// This registration is used by the device to aquire the device's name and secret key, beyond the
-/// creation of the communication channel between the controller and the player, which is done by
-/// the WebSocket connection.
-async fn register(Extension(state): Extension<Arc<State>>) -> impl IntoResponse {
-    debug!("Registering device");
-
-    let device = uuid::Uuid::new_v4().to_string();
-    let secret = "".to_string();
-
-    let (tx, rx) = mpsc::channel(100);
-
-    {
-        let mut channels = state.channels.write().await;
-        channels.insert(
-            device.clone(),
-            Arc::new(RwLock::new(Channel {
-                sender: Some(tx),
-                receiver: Some(rx),
-            })),
-        );
-    }
-
-    info!("Device registered: {}", device);
-
-    (StatusCode::CREATED, Json(PlayerPayload { device, secret }))
-}
-
-/// Unregister a device from the server.
-///
-/// This is used to remove the device from the server and close the communication channel between
-/// the controller and the player.
-async fn unregister(
-    Extension(state): Extension<Arc<State>>,
-    Json(payload): Json<PlayerPayload>,
-) -> impl IntoResponse {
-    // TODO: Remove the channel from the server, cancelling all WebSocket oponed connections.
-
-    let device = payload.device.clone();
-    let secret = payload.secret.clone();
-
-    {
-        let mut channels = state.channels.write().await;
-        channels.remove(&device);
-    }
-
-    info!("Device unregistered: {}", device);
-
-    StatusCode::OK
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -117,6 +65,144 @@ pub enum Command {
 pub struct Event {
     pub command: Command,
     pub payload: Option<String>,
+}
+
+async fn player(
+    ws: WebSocketUpgrade,
+    Extension(state): Extension<Arc<State>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_player(socket, state))
+}
+
+async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
+    debug!("Registering device");
+
+    let device = uuid::Uuid::new_v4().to_string();
+    let secret = "".to_string();
+
+    let (sx, mut rx) = mpsc::channel(100);
+
+    let mut channels = state.channels.write().await;
+    channels.insert(
+        device.clone(),
+        Arc::new(RwLock::new(Channel { sender: Some(sx) })),
+    );
+    drop(channels);
+
+    let registration = Registration {
+        device: device.clone(),
+        secret,
+    };
+    let msg = serde_json::to_string(&registration).unwrap();
+
+    if let Err(_) = socket.send(Message::text(msg.clone())).await {
+        error!("failed to send the registration message on websocket connection");
+
+        return;
+    };
+
+    loop {
+        select! {
+            val = socket.recv() => {
+                match val {
+                    Some(result) => {
+                        debug!("websocket from player received a message");
+
+                        match result {
+                            Ok(msg) => {
+                                dbg!(msg);
+                            },
+                            Err(e) => {
+                                dbg!(e);
+                                error!("websocket from player received an error");
+
+                                break;
+                            },
+                        }
+                    },
+                    None => {
+                        debug!("websocket from player didn't received a message");
+
+                        break;
+                    },
+                };
+            }
+            val = rx.recv() => {
+                match val {
+                    Some(msg) => {
+                        let event: Event = match serde_json::from_str(&msg.to_string()) {
+                            Ok(event) => event,
+                            Err(e) => {
+                                error!("Failed to parse event: {}", e);
+                                continue;
+                            }
+                        };
+
+                        debug!("Received event on player side: {:?}", event);
+
+                        match event.command {
+                            Command::Pair => {
+                                info!("Device paired on player side");
+
+                                if let Err(_) = socket.send(Message::text(msg.clone())).await {
+                                    break;
+                                };
+                            }
+                            Command::Play => {
+                                info!("playing file on player side");
+
+                                if let Err(_) = socket.send(Message::text(msg.clone())).await {
+                                    break;
+                                };
+                            }
+                            Command::Stop => {
+                                info!("stopping file on player side");
+
+                                if let Err(_) = socket.send(Message::text(msg.clone())).await {
+                                    break;
+                                };
+                            }
+                            Command::Unpair => {
+                                info!("Device unpaired on player side");
+
+                                if let Err(_) = socket.send(Message::text(msg.clone())).await {
+                                    break;
+                                };
+
+                                break;
+                            }
+                        }
+
+                    },
+                    None => {
+                        debug!("Failed to receive message");
+
+                        break;
+                    },
+                };
+            }
+        };
+    }
+
+    trace!("Closing WebSocket connection on player side");
+
+    match socket.send(Message::Close(None)).await {
+        Ok(_) => {
+            info!("Websocket connection send close message on player side");
+        }
+        Err(e) => {
+            error!("Failed to close WebSocket connection: {}", e);
+        }
+    }
+
+    rx.close();
+
+    trace!("trying to delete the devcie from channels");
+
+    let mut channels = state.channels.write().await;
+    channels.remove(&device.clone());
+
+    info!("WebSocket connection closed on player side");
 }
 
 async fn controller(
@@ -183,6 +269,12 @@ async fn handle_controller(
     let mut closed = false;
 
     while let Some(Ok(msg)) = socket.recv().await {
+        if sender.is_closed() {
+            debug!("websocket of the screen is closed");
+
+            break;
+        }
+
         match msg {
             Message::Text(text) => {
                 println!(
@@ -280,7 +372,7 @@ async fn handle_controller(
                 }
             }
             Message::Close(_) => {
-                info!("WebSocket closed");
+                info!("Websocket connection received a close message on controller side");
 
                 closed = true;
 
@@ -290,136 +382,20 @@ async fn handle_controller(
         }
     }
 
-    trace!("Closing WebSocket connection on controller side");
+    trace!("Closing Websocket connection on controller side");
 
     if !closed {
-        socket.send(Message::Close(None)).await.unwrap();
-    }
-
-    info!("WebSocket connection closed on controller side");
-}
-
-async fn player(
-    ws: WebSocketUpgrade,
-    Extension(state): Extension<Arc<State>>,
-    Query(params): Query<HashMap<String, String>>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_player(socket, state, params))
-}
-
-async fn handle_player(mut socket: WebSocket, state: Arc<State>, params: HashMap<String, String>) {
-    let device = match params.get("device") {
-        Some(device) => device.clone(),
-        None => {
-            error!("No device found in params");
-
-            return;
-        }
-    };
-
-    let _secret = match params.get("secret") {
-        Some(secret) => secret.clone(),
-        None => {
-            error!("No secret found in params");
-
-            return;
-        }
-    };
-
-    let channels = state.channels.read().await;
-    let device = device;
-
-    let channel = match channels.get(&device) {
-        Some(tx) => tx.clone(),
-        None => {
-            error!("No channel found for device: {}", device);
-            return;
-        }
-    };
-    drop(channels);
-
-    let mut lock = channel.write().await;
-    let mut receiver = match lock.receiver.take() {
-        Some(r) => {
-            info!("Receiver found for device: {}", device);
-
-            r
-        }
-
-        None => {
-            error!("No receiver found for device: {}", device);
-
-            return;
-        }
-    };
-    drop(lock);
-
-    while !receiver.is_closed() {
-        match receiver.recv().await {
-            Some(msg) => {
-                let event: Event = match serde_json::from_str(&msg.to_string()) {
-                    Ok(event) => event,
-                    Err(e) => {
-                        error!("Failed to parse event: {}", e);
-                        continue;
-                    }
-                };
-
-                debug!("Received event on player side: {:?}", event);
-
-                match event.command {
-                    Command::Pair => {
-                        info!("Device paired on player side");
-
-                        if let Err(_) = socket.send(Message::text(msg.clone())).await {
-                            break;
-                        };
-                    }
-                    Command::Play => {
-                        info!("playing file on player side");
-
-                        if let Err(_) = socket.send(Message::text(msg.clone())).await {
-                            break;
-                        };
-                    }
-                    Command::Stop => {
-                        info!("stopping file on player side");
-
-                        if let Err(_) = socket.send(Message::text(msg.clone())).await {
-                            break;
-                        };
-                    }
-                    Command::Unpair => {
-                        info!("Device unpaired on player side");
-
-                        if let Err(_) = socket.send(Message::text(msg.clone())).await {
-                            break;
-                        };
-
-                        break;
-                    }
-                }
+        match socket.send(Message::Close(None)).await {
+            Ok(_) => {
+                info!("websocket connection send close message on controller side");
             }
-            None => {
-                debug!("Failed to receive message");
-
-                break;
+            Err(e) => {
+                error!("failed to close websocket connection: {}", e);
             }
         }
     }
 
-    trace!("Closing WebSocket connection on player side");
-
-    match socket.send(Message::Close(None)).await {
-        Ok(_) => {
-            info!("WebSocket connection closed on player side");
-        }
-        Err(e) => {
-            error!("Failed to close WebSocket connection: {}", e);
-        }
-    }
-
-    info!("WebSocket connection closed on player side");
+    info!("websocket connection closed on controller side");
 }
 
 const DEFAULT_SERVER_HOST: &str = "localhost";
@@ -486,8 +462,6 @@ async fn main() -> Result<(), Error> {
         );
 
     let router = Router::new()
-        .route("/api/register", post(register))
-        .route("/api/unregister", post(unregister))
         .route("/ws/controller", get(controller))
         .route("/ws/player", get(player))
         .layer(Extension(state))
