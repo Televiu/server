@@ -25,6 +25,7 @@ use tower_http::{
     self, compression::CompressionLayer, cors::CorsLayer, propagate_header::PropagateHeaderLayer,
     trace::TraceLayer,
 };
+use tracing_subscriber::FmtSubscriber;
 
 pub struct Channel {
     pub sender: Option<mpsc::Sender<Utf8Bytes>>,
@@ -401,7 +402,12 @@ const DEFAULT_SERVER_PORT: &str = "9000";
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    env_logger::Builder::from_env("LOG").init();
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+
     info!("televiu server started");
 
     let server_host = match env::var("TELEVIU_SERVER_HOST") {
