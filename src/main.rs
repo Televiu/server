@@ -81,6 +81,8 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
     let device = uuid::Uuid::new_v4().to_string();
     let secret = "".to_string();
 
+    info!("Device {} registered", device);
+
     let (sx, mut rx) = mpsc::channel(100);
 
     let mut channels = state.channels.write().await;
@@ -201,7 +203,9 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
     trace!("trying to delete the devcie from channels");
 
     let mut channels = state.channels.write().await;
-    channels.remove(&device.clone());
+    channels.remove(&device);
+
+    info!("Device {} unregistered", device);
 
     info!("WebSocket connection closed on player side");
 }
