@@ -189,7 +189,10 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
             info!("Websocket connection send close message on player side");
         }
         Err(e) => {
-            error!("Failed to close WebSocket connection: {}", e);
+            debug!(
+                "Failed to close WebSocket connection from the player: {}",
+                e
+            );
         }
     }
 
