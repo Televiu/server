@@ -109,15 +109,12 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
                         debug!("websocket from player received a message");
 
                         match result {
-                            Ok(msg) => {
-                                dbg!(msg);
-                            },
                             Err(e) => {
-                                dbg!(e);
-                                error!("websocket from player received an error");
+                                error!("websocket from player received an error: {}", e);
 
                                 break;
                             },
+                            _ => {}
                         }
                     },
                     None => {
