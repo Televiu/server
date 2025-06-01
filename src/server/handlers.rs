@@ -50,12 +50,12 @@ pub async fn player(
 }
 
 async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
-    debug!("Registering device");
+    debug!("registering device");
 
     let device = uuid::Uuid::new_v4().to_string();
     let secret = "".to_string();
 
-    info!("Device {} registered", device);
+    info!("device {} registered", device);
 
     let (sx, mut rx) = mpsc::channel(100);
 
@@ -107,16 +107,16 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
                         let event: Event = match serde_json::from_str(&msg.to_string()) {
                             Ok(event) => event,
                             Err(e) => {
-                                error!("Failed to parse event: {}", e);
+                                error!("failed to parse event: {}", e);
                                 continue;
                             }
                         };
 
-                        debug!("Received event on player side: {:?}", event);
+                        debug!("received event on player side: {:?}", event);
 
                         match event.command {
                             Command::Pair => {
-                                info!("Device paired on player side");
+                                info!("device paired on player side");
 
                                 if let Err(_) = socket.send(Message::text(msg.clone())).await {
                                     error!("failed to send message");
@@ -143,7 +143,7 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
                                 };
                             }
                             Command::Unpair => {
-                                info!("Device unpaired on player side");
+                                info!("device unpaired on player side");
 
                                 if let Err(_) = socket.send(Message::text(msg.clone())).await {
                                     error!("failed to send message");
@@ -157,7 +157,7 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
 
                     },
                     None => {
-                        debug!("Failed to receive message");
+                        debug!("failed to receive message");
 
                         break;
                     },
@@ -166,15 +166,15 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
         };
     }
 
-    trace!("Closing WebSocket connection on player side");
+    trace!("closing WebSocket connection on player side");
 
     match socket.send(Message::Close(None)).await {
         Ok(_) => {
-            info!("Websocket connection send close message on player side");
+            info!("websocket connection send close message on player side");
         }
         Err(e) => {
             debug!(
-                "Failed to close WebSocket connection from the player: {}",
+                "failed to close WebSocket connection from the player: {}",
                 e
             );
         }
@@ -187,9 +187,9 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
     let mut channels = state.channels.write().await;
     channels.remove(&device);
 
-    info!("Device {} unregistered", device);
+    info!("device {} unregistered", device);
 
-    info!("WebSocket connection closed on player side");
+    info!("webSocket connection closed on player side");
 }
 
 pub async fn controller(
@@ -208,7 +208,7 @@ async fn handle_controller(
     let device = match params.get("device") {
         Some(device) => device.clone(),
         None => {
-            error!("No device found in params");
+            error!("no device found in params");
 
             return;
         }
@@ -217,7 +217,7 @@ async fn handle_controller(
     let _secret = match params.get("secret") {
         Some(secret) => secret.clone(),
         None => {
-            error!("No secret found in params");
+            error!("no secret found in params");
 
             return;
         }
@@ -229,7 +229,7 @@ async fn handle_controller(
     let channel = match channels.get(&device) {
         Some(tx) => tx.clone(),
         None => {
-            error!("No channel found for device: {}", device);
+            error!("no channel found for device: {}", device);
 
             return;
         }
@@ -240,13 +240,13 @@ async fn handle_controller(
     let mut lock = channel.write().await;
     let sender = match lock.sender.take() {
         Some(s) => {
-            info!("Sender found for device: {}", device);
+            info!("sender found for device: {}", device);
 
             s
         }
 
         None => {
-            error!("No sender found for device: {}", device);
+            error!("no sender found for device: {}", device);
 
             return;
         }
@@ -267,24 +267,24 @@ async fn handle_controller(
         match msg {
             Message::Text(text) => {
                 println!(
-                    "Received message: {:?}",
+                    "received message: {:?}",
                     String::from_utf8_lossy(text.as_bytes())
                 );
 
                 let event: Event = match serde_json::from_str(&text) {
                     Ok(event) => event,
                     Err(e) => {
-                        error!("Failed to parse event: {}", e);
+                        error!("failed to parse event: {}", e);
                         continue;
                     }
                 };
 
-                debug!("Received event on controller side: {:?}", event);
+                debug!("received event on controller side: {:?}", event);
 
                 match event.command {
                     Command::Pair => {
                         if paired {
-                            error!("Device already paired");
+                            error!("device already paired");
 
                             let close = Utf8Bytes::from(
                                 serde_json::to_string(&Event {
@@ -299,7 +299,7 @@ async fn handle_controller(
                             break;
                         }
 
-                        info!("Device paired");
+                        info!("device paired");
 
                         sender.send(text).await.unwrap();
 
@@ -307,7 +307,7 @@ async fn handle_controller(
                     }
                     Command::Play => {
                         if playing {
-                            error!("Device already playing");
+                            error!("device already playing");
 
                             let close = Utf8Bytes::from(
                                 serde_json::to_string(&Event {
@@ -330,7 +330,7 @@ async fn handle_controller(
                     }
                     Command::Stop => {
                         if !playing {
-                            error!("Device not playing");
+                            error!("device not playing");
 
                             let close = Utf8Bytes::from(
                                 serde_json::to_string(&Event {
@@ -352,7 +352,7 @@ async fn handle_controller(
                         playing = false;
                     }
                     Command::Unpair => {
-                        info!("Device unpaired");
+                        info!("device unpaired");
 
                         sender.send(text).await.unwrap();
 
@@ -361,7 +361,7 @@ async fn handle_controller(
                 }
             }
             Message::Close(_) => {
-                info!("Websocket connection received a close message on controller side");
+                info!("websocket connection received a close message on controller side");
 
                 closed = true;
 
@@ -371,7 +371,7 @@ async fn handle_controller(
         }
     }
 
-    trace!("Closing Websocket connection on controller side");
+    trace!("closing websocket connection on controller side");
 
     if !closed {
         match socket.send(Message::Close(None)).await {
