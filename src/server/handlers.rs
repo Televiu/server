@@ -60,10 +60,7 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
     let (sx, mut rx) = mpsc::channel(100);
 
     let mut channels = state.channels.write().await;
-    channels.insert(
-        device.clone(),
-        Arc::new(RwLock::new(Channel { sender: Some(sx) })),
-    );
+    channels.insert(device.clone(), RwLock::new(Channel { sender: Some(sx) }));
     drop(channels);
 
     let registration = Registration {
@@ -295,15 +292,13 @@ async fn handle_controller(
     let device = device;
 
     let channel = match channels.get(&device) {
-        Some(tx) => tx.clone(),
+        Some(tx) => tx,
         None => {
             error!("no channel found for device: {}", device);
 
             return;
         }
     };
-
-    drop(channels);
 
     let mut lock = channel.write().await;
     let sender = match lock.sender.take() {

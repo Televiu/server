@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use axum::extract::ws::Utf8Bytes;
 use tokio::sync::{RwLock, mpsc};
@@ -10,7 +10,7 @@ pub struct Channel {
 type Device = String;
 
 pub struct State {
-    pub channels: RwLock<HashMap<Device, Arc<RwLock<Channel>>>>,
+    pub channels: RwLock<HashMap<Device, RwLock<Channel>>>,
 }
 
 impl State {
