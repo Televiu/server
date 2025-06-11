@@ -5,7 +5,7 @@ use tokio::{
 };
 
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use axum::{
     extract::{
@@ -116,7 +116,7 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
 
                         match event.command {
                             Command::Pair => {
-                                info!("device paired on player side");
+                                info!("player paired");
 
                                 if let Err(_) = socket.send(Message::text(msg.clone())).await {
                                     error!("failed to send message");
@@ -125,7 +125,7 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
                                 };
                             }
                             Command::Play => {
-                                info!("playing file on player side");
+                                info!("palyer played");
 
                                 if let Err(_) = socket.send(Message::text(msg.clone())).await {
                                     error!("failed to send message");
@@ -134,7 +134,7 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
                                 };
                             }
                             Command::Stop => {
-                                info!("stopping file on player side");
+                                info!("player stopped");
 
                                 if let Err(_) = socket.send(Message::text(msg.clone())).await {
                                     error!("failed to send message");
@@ -143,7 +143,7 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
                                 };
                             }
                             Command::Unpair => {
-                                info!("device unpaired on player side");
+                                info!("player unpaired");
 
                                 if let Err(_) = socket.send(Message::text(msg.clone())).await {
                                     error!("failed to send message");
@@ -157,7 +157,7 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
 
                     },
                     None => {
-                        debug!("failed to receive message");
+                        debug!("failed to receive message on websocket player loop");
 
                         break;
                     },
@@ -166,15 +166,15 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
         };
     }
 
-    trace!("closing WebSocket connection on player side");
+    trace!("player websocket loop exit");
 
     match socket.send(Message::Close(None)).await {
         Ok(_) => {
-            info!("websocket connection send close message on player side");
+            debug!("websocket close message send from player to client");
         }
         Err(e) => {
             debug!(
-                "failed to close WebSocket connection from the player: {}",
+                "failed to close WebSocket connection from the player to client: {}",
                 e
             );
         }
@@ -198,6 +198,74 @@ pub async fn controller(
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     return ws.on_upgrade(move |socket| handle_controller(socket, state, params));
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ControllerState {
+    Unpaired,
+    Paired,
+    Played,
+    Stopped,
+}
+
+impl Default for ControllerState {
+    fn default() -> Self {
+        ControllerState::Unpaired
+    }
+}
+
+impl ControllerState {
+    fn pair(&mut self) -> bool {
+        match *self {
+            ControllerState::Unpaired => {
+                *self = ControllerState::Paired;
+                true
+            }
+            _ => {
+                *self = ControllerState::Unpaired;
+                false
+            }
+        }
+    }
+
+    fn play(&mut self) -> bool {
+        match *self {
+            ControllerState::Paired | ControllerState::Stopped => {
+                *self = ControllerState::Played;
+                true
+            }
+            _ => {
+                *self = ControllerState::Unpaired;
+                false
+            }
+        }
+    }
+
+    fn stop(&mut self) -> bool {
+        match *self {
+            ControllerState::Played => {
+                *self = ControllerState::Stopped;
+                true
+            }
+            _ => {
+                *self = ControllerState::Unpaired;
+                false
+            }
+        }
+    }
+
+    fn unpair(&mut self) -> bool {
+        match *self {
+            ControllerState::Paired | ControllerState::Played | ControllerState::Stopped => {
+                *self = ControllerState::Unpaired;
+                true
+            }
+            _ => {
+                *self = ControllerState::Unpaired;
+                false
+            }
+        }
+    }
 }
 
 async fn handle_controller(
@@ -239,10 +307,10 @@ async fn handle_controller(
 
     let mut lock = channel.write().await;
     let sender = match lock.sender.take() {
-        Some(s) => {
+        Some(sender) => {
             info!("sender found for device: {}", device);
 
-            s
+            sender
         }
 
         None => {
@@ -253,9 +321,7 @@ async fn handle_controller(
     };
     drop(lock);
 
-    let mut paired = false;
-    let mut playing = false;
-    let mut closed = false;
+    let mut controller_state = ControllerState::default();
 
     while let Some(Ok(msg)) = socket.recv().await {
         if sender.is_closed() {
@@ -283,8 +349,8 @@ async fn handle_controller(
 
                 match event.command {
                     Command::Pair => {
-                        if paired {
-                            error!("device already paired");
+                        if !controller_state.pair() {
+                            error!("controller already paired");
 
                             let close = Utf8Bytes::from(
                                 serde_json::to_string(&Event {
@@ -294,20 +360,20 @@ async fn handle_controller(
                                 .unwrap(),
                             );
 
-                            sender.send(close).await.unwrap();
+                            if let Err(e) = sender.send(close).await {
+                                error!("failed to send message from controller to player: {}", e);
+                            }
 
                             break;
                         }
 
-                        info!("device paired");
+                        info!("controller paired");
 
                         sender.send(text).await.unwrap();
-
-                        paired = true;
                     }
                     Command::Play => {
-                        if playing {
-                            error!("device already playing");
+                        if !controller_state.play() {
+                            error!("controller already playing");
 
                             let close = Utf8Bytes::from(
                                 serde_json::to_string(&Event {
@@ -317,7 +383,9 @@ async fn handle_controller(
                                 .unwrap(),
                             );
 
-                            sender.send(close).await.unwrap();
+                            if let Err(e) = sender.send(close).await {
+                                error!("failed to send message from controller to player: {}", e);
+                            }
 
                             break;
                         }
@@ -325,12 +393,10 @@ async fn handle_controller(
                         info!("playing file");
 
                         sender.send(text).await.unwrap();
-
-                        playing = true;
                     }
                     Command::Stop => {
-                        if !playing {
-                            error!("device not playing");
+                        if !controller_state.stop() {
+                            error!("controller not playing");
 
                             let close = Utf8Bytes::from(
                                 serde_json::to_string(&Event {
@@ -340,7 +406,9 @@ async fn handle_controller(
                                 .unwrap(),
                             );
 
-                            sender.send(close).await.unwrap();
+                            if let Err(e) = sender.send(close).await {
+                                error!("failed to send message from controller to player: {}", e);
+                            }
 
                             break;
                         }
@@ -348,11 +416,25 @@ async fn handle_controller(
                         info!("stopping file");
 
                         sender.send(text).await.unwrap();
-
-                        playing = false;
                     }
                     Command::Unpair => {
-                        info!("device unpaired");
+                        if !controller_state.unpair() {
+                            error!("controller already unpaired");
+
+                            let close = Utf8Bytes::from(
+                                serde_json::to_string(&Event {
+                                    command: Command::Unpair,
+                                    payload: None,
+                                })
+                                .unwrap(),
+                            );
+
+                            if let Err(e) = sender.send(close).await {
+                                error!("failed to send message from controller to player: {}", e);
+                            }
+                        }
+
+                        info!("controller unpaired");
 
                         sender.send(text).await.unwrap();
 
@@ -363,7 +445,30 @@ async fn handle_controller(
             Message::Close(_) => {
                 info!("websocket connection received a close message on controller side");
 
-                closed = true;
+                if !controller_state.unpair() {
+                    error!("device already playing");
+
+                    let close = Utf8Bytes::from(
+                        serde_json::to_string(&Event {
+                            command: Command::Unpair,
+                            payload: None,
+                        })
+                        .unwrap(),
+                    );
+
+                    if let Err(e) = sender.send(close).await {
+                        error!("failed to send message from controller to player: {}", e);
+                    }
+                }
+
+                match socket.send(Message::Close(None)).await {
+                    Ok(_) => {
+                        info!("websocket connection send close message on controller side");
+                    }
+                    Err(e) => {
+                        error!("failed to close websocket connection: {}", e);
+                    }
+                }
 
                 break;
             }
@@ -371,17 +476,12 @@ async fn handle_controller(
         }
     }
 
-    trace!("closing websocket connection on controller side");
+    trace!("controller websocket loop exited");
 
-    if !closed {
-        match socket.send(Message::Close(None)).await {
-            Ok(_) => {
-                info!("websocket connection send close message on controller side");
-            }
-            Err(e) => {
-                error!("failed to close websocket connection: {}", e);
-            }
-        }
+    if let ControllerState::Unpaired = controller_state {
+        debug!("controller status is unpaired as expected");
+    } else {
+        warn!("controller loop existed without being unpaired");
     }
 
     info!("websocket connection closed on controller side");
