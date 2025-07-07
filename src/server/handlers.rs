@@ -5,7 +5,7 @@ use tokio::{
 };
 
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{Value, debug, error, info, trace, warn};
 
 use axum::{
     extract::{
@@ -40,6 +40,15 @@ pub struct Event {
     pub payload: Option<String>,
 }
 
+impl ToString for Event {
+    fn to_string(&self) -> String {
+        return format!(
+            "command {:?} with payload of {:?}",
+            self.command, self.payload
+        );
+    }
+}
+
 pub async fn player(
     ws: WebSocketUpgrade,
     Extension(state): Extension<Arc<State>>,
@@ -55,7 +64,7 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
     let device = uuid::Uuid::new_v4().to_string();
     let secret = "".to_string();
 
-    info!("device {} registered", device);
+    info!(device = device, "device registered");
 
     let (sx, mut rx) = mpsc::channel(100);
 
@@ -84,7 +93,7 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
 
                         match result {
                             Err(e) => {
-                                error!("websocket from player received an error: {}", e);
+                                error!(error = e.to_string(), "websocket from player received an error");
 
                                 break;
                             },
@@ -104,19 +113,19 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
                         let event: Event = match serde_json::from_str(&msg.to_string()) {
                             Ok(event) => event,
                             Err(e) => {
-                                error!("failed to parse event: {}", e);
+                                error!(error = e.to_string(), "failed to parse event");
                                 continue;
                             }
                         };
 
-                        debug!("received event on player side: {:?}", event);
+                        debug!(event = event.to_string(), "received event on player side");
 
                         match event.command {
                             Command::Pair => {
                                 info!("player paired");
 
                                 if let Err(_) = socket.send(Message::text(msg.clone())).await {
-                                    error!("failed to send message");
+                                    error!("failed to send pair message");
 
                                     break;
                                 };
@@ -125,7 +134,7 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
                                 info!("palyer played");
 
                                 if let Err(_) = socket.send(Message::text(msg.clone())).await {
-                                    error!("failed to send message");
+                                    error!("failed to send play message");
 
                                     break;
                                 };
@@ -134,7 +143,7 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
                                 info!("player stopped");
 
                                 if let Err(_) = socket.send(Message::text(msg.clone())).await {
-                                    error!("failed to send message");
+                                    error!("failed to send stop message");
 
                                     break;
                                 };
@@ -143,7 +152,7 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
                                 info!("player unpaired");
 
                                 if let Err(_) = socket.send(Message::text(msg.clone())).await {
-                                    error!("failed to send message");
+                                    error!("failed to send unpair message");
 
                                     break;
                                 };
@@ -171,8 +180,8 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
         }
         Err(e) => {
             debug!(
-                "failed to close WebSocket connection from the player to client: {}",
-                e
+                error = e.to_string(),
+                "failed to close WebSocket connection from the player to client",
             );
         }
     }
@@ -184,7 +193,7 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
     let mut channels = state.channels.write().await;
     channels.remove(&device);
 
-    info!("device {} unregistered", device);
+    info!(device = device, "device unregistered");
 
     info!("webSocket connection closed on player side");
 }
