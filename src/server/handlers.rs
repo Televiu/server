@@ -121,33 +121,6 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
                         debug!(event = event.to_string(), "received event on player side");
 
                         match event.command {
-                            Command::Pair => {
-                                info!("player paired");
-
-                                if let Err(_) = socket.send(Message::text(msg.clone())).await {
-                                    error!("failed to send pair message");
-
-                                    break;
-                                };
-                            }
-                            Command::Play => {
-                                info!("palyer played");
-
-                                if let Err(_) = socket.send(Message::text(msg.clone())).await {
-                                    error!("failed to send play message");
-
-                                    break;
-                                };
-                            }
-                            Command::Stop => {
-                                info!("player stopped");
-
-                                if let Err(_) = socket.send(Message::text(msg.clone())).await {
-                                    error!("failed to send stop message");
-
-                                    break;
-                                };
-                            }
                             Command::Unpair => {
                                 info!("player unpaired");
 
@@ -158,6 +131,15 @@ async fn handle_player(mut socket: WebSocket, state: Arc<State>) {
                                 };
 
                                 break;
+                            }
+                            _ => {
+                                info!("command received on player side: {:?}", event.command);
+
+                                if let Err(_) = socket.send(Message::text(msg.clone())).await {
+                                    error!("failed to send message from player to client");
+
+                                    break;
+                                };
                             }
                         }
 
